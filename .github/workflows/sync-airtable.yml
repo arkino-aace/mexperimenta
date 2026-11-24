@@ -1,0 +1,56 @@
+name: Sync Airtable
+# Cada noche (3:00 am CDMX) y cuando se guarda contenido.json desde el panel:
+# 1) trae los datos de Airtable, 2) regenera páginas, fotogramas y números,
+# 3) (si están configurados los secretos FTP) envía el resultado al hosting.
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['contenido.json','sync_arkino.py','build_real_collections.py','build_destacados.py','build_stills.py','build_datos.py']
+permissions:
+  contents: write
+concurrency:
+  group: sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      FTP_SERVER: ${{ secrets.FTP_SERVER }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python3 sync_arkino.py
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+      - run: python3 build_real_collections.py
+      - run: python3 build_datos.py
+      - run: sudo apt-get install -y ffmpeg || true
+      - run: pip install pillow numpy && python3 build_destacados.py
+      - run: MAX_STILLS=100 python3 build_stills.py
+      - name: Guardar cambios en el repositorio
+        run: |
+          git config user.name "mexperimenta-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || (git commit -m "Sync Airtable" && git push)
+      - name: Preparar lo que va al hosting
+        run: |
+          mkdir -p _deploy/assets
+          for f in avances-cinematograficos.html gral-treegan.html ultracinema.html archivos-x.html reapropiacion.html videoarte.html documental.html cine-casero.html pieza.html conteos.json destacados.json contenido.json datos.json; do
+            [ -f "$f" ] && cp "$f" _deploy/ || true
+          done
+          [ -d assets/destacados ] && cp -r assets/destacados _deploy/assets/ || true
+          [ -d assets/stills ] && cp -r assets/stills _deploy/assets/ || true
+      - name: Enviar al hosting por FTP
+        if: env.FTP_SERVER != ''
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./_deploy/
+          server-dir: ${{ secrets.FTP_DIR || '/' }}
