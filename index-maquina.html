@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mexperimenta · la máquina</title>
+<meta name="description" content="Motor de actualización de Mexperimenta: cada noche lee Airtable y deja la web al día.">
+<style>
+  :root { --bg:#0b0a07; --ink:#d9d3be; --dim:#6f6a57; --g:#9dffb0; --warn:#ffcf70; --bad:#ff8a7a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--ink); }
+  body { font:15px/1.6 Georgia, serif; min-height:100vh; padding:28px 16px 40px; }
+  main { max-width:900px; margin:0 auto; }
+  h1 { margin:0 0 4px; font:bold 13px "Courier New",monospace; letter-spacing:3px; text-transform:uppercase; color:#efebdc; }
+  .sub { margin:0 0 18px; color:var(--dim); font-size:14px; }
+  #wrap { border:1px solid #2c281e; border-radius:10px; background:#0e0d09; padding:14px 8px; overflow:hidden; }
+  #vcr { margin:0 auto; display:block; font:8px/1 "Courier New",monospace; color:var(--g); white-space:pre; text-align:left;
+         text-shadow:0 0 6px rgba(157,255,176,.35); width:max-content; max-width:100%; }
+  .panel { margin-top:18px; display:grid; gap:14px; grid-template-columns:1fr; }
+  @media (min-width:720px){ .panel { grid-template-columns:1.1fr 1fr; } }
+  .box { border:1px solid #2c281e; border-radius:8px; padding:14px 16px; background:#100f0b; }
+  .box h2 { margin:0 0 8px; font:bold 11px "Courier New",monospace; letter-spacing:2px; text-transform:uppercase; color:var(--dim); }
+  .st { font:14px/1.7 "Courier New",monospace; }
+  .st b { color:#efebdc; font-weight:normal; }
+  .led { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:8px; background:#555; vertical-align:middle; }
+  .led.ok { background:var(--g); box-shadow:0 0 8px var(--g); } .led.run { background:var(--warn); box-shadow:0 0 8px var(--warn); animation:pp 1s infinite; }
+  .led.bad { background:var(--bad); box-shadow:0 0 8px var(--bad); }
+  @keyframes pp { 50% { opacity:.25; } }
+  ol.steps { margin:0; padding:0; list-style:none; font:12.5px/1.9 "Courier New",monospace; color:var(--dim); }
+  ol.steps li::before { content:"○ "; } ol.steps li.on { color:var(--g); } ol.steps li.on::before { content:"● "; }
+  ol.steps li.done { color:#8a8570; } ol.steps li.done::before { content:"✓ "; }
+  .links { margin-top:18px; display:flex; flex-wrap:wrap; gap:10px; }
+  .links a { padding:9px 16px; border:1px solid var(--g); border-radius:6px; color:var(--g); text-decoration:none; font:12px "Courier New",monospace; letter-spacing:1.5px; text-transform:uppercase; }
+  .links a.sec { border-color:#4d4838; color:#b8b19c; }
+  details { margin-top:18px; color:#a9a38f; font-size:14px; }
+  summary { cursor:pointer; font:12px "Courier New",monospace; letter-spacing:1.5px; text-transform:uppercase; color:var(--dim); }
+  details ul { margin:10px 0 0; padding-left:20px; } details li { margin-bottom:6px; }
+  code { font:13px "Courier New",monospace; color:#d9d3be; }
+  .note { margin-top:8px; font-size:12px; color:var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Mexperimenta · la máquina</h1>
+  <p class="sub">Cada noche esta máquina lee Airtable y deja la web al día.</p>
+
+  <div id="wrap"><pre id="vcr" aria-label="Animación en ASCII de una videocasetera VHS sin tapa, con la cinta en movimiento"></pre></div>
+
+  <div class="panel">
+    <div class="box">
+      <h2>Estado de la sincronización</h2>
+      <div class="st" id="estado"><span class="led"></span>consultando…</div>
+      <div class="st" id="ultima"></div>
+      <div class="st" id="proxima"></div>
+      <div class="note" id="nota"></div>
+    </div>
+    <div class="box">
+      <h2>Lo que hace cada vuelta</h2>
+      <ol class="steps" id="pasos"></ol>
+    </div>
+  </div>
+
+  <div class="links">
+    <a href="https://mexperimenta.ultracinema.x10.mx/">Abrir la web →</a>
+    <a class="sec" id="lnk-actions" href="https://github.com/arkino-aace/mexperimenta/actions">Ver las ejecuciones</a>
+    <a class="sec" href="https://github.com/arkino-aace/mexperimenta">Repositorio</a>
+  </div>
+
+  <details>
+    <summary>¿Qué es este repositorio?</summary>
+    <ul>
+      <li>Aquí vive el <b>motor</b> de Mexperimenta: los scripts que leen la base de Airtable y arman las páginas.</li>
+      <li>La web pública no está aquí: se envía por FTP al hosting de Arkino.</li>
+      <li>Se ejecuta sola a las 3:00 a. m. (hora de CDMX) y también se puede lanzar a mano en <code>Actions → Sync Airtable → Run workflow</code>.</li>
+      <li>La guía para Arkino está en el archivo <code>README.md</code>.</li>
+    </ul>
+  </details>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var W = 78, H = 33;
+  var reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ───────────── Máquina ───────────── */
+  var pre = document.getElementById("vcr");
+  var wrap = document.getElementById("wrap");
+  function fit() {
+    var avail = wrap.clientWidth - 16;
+    var fs = Math.max(5, Math.min(13, Math.floor(avail / (W * 0.6))));
+    pre.style.fontSize = fs + "px";
+  }
+  window.addEventListener("resize", fit); fit();
+
+  var speed = 1;            // 1 = marcha normal; sube cuando se sincroniza de verdad
+  var g;                    // rejilla
+  function put(x, y, c) { x = Math.round(x); y = Math.round(y); if (x >= 0 && x < W && y >= 0 && y < H) g[y][x] = c; }
+  function text(x, y, s) { for (var i = 0; i < s.length; i++) put(x + i, y, s[i]); }
+  function line(x0, y0, x1, y1, fn) {          // Bresenham; fn(i, x, y)
+    x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
+    var dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy, i = 0;
+    for (;;) { fn(i++, x0, y0); if (x0 === x1 && y0 === y1) break; var e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
+  }
+  function dist(dx, dy) { return Math.sqrt(dx * dx + 4 * dy * dy); }   // las letras son ~2× más altas que anchas
+
+  var cassette = { x0: 3, y0: 1, x1: 74, y1: 15 };
+  var supply = { x: 22, y: 8 }, take = { x: 55, y: 8 };
+  var drum = { x: 38.5, y: 25 };
+  var path = [ [14, 15], [9, 19], [28, 26], [38, 30], [49, 26], [57, 23], [68, 19], [63, 15] ];
+
+  function reel(c, rpack, ang) {
+    var hub = 4.2;
+    for (var y = c.y - 8; y <= c.y + 8; y++) for (var x = Math.round(c.x - 17); x <= c.x + 17; x++) {
+      var d = dist(x - c.x, y - c.y);
+      if (d > rpack + 0.5) continue;
+      if (d <= hub) {
+        var a = Math.atan2((y - c.y) * 2, x - c.x) - ang;
+        var spoke = Math.abs(((a * 6 / Math.PI) % 2 + 2) % 2 - 1) > 0.78;     // 6 radios
+        if (d > hub - 1) put(x, y, "O"); else put(x, y, spoke ? "#" : (d < 1 ? "+" : " "));
+      } else if (d > rpack - 0.9) put(x, y, "O");
+      else put(x, y, (Math.floor(d) % 2 ? ":" : "."));
+    }
+  }
+
+  function drawDrum(t) {
+    var r = 10.5;
+    for (var y = Math.round(drum.y - 6); y <= drum.y + 6; y++) for (var x = Math.round(drum.x - 12); x <= drum.x + 12; x++) {
+      var d = dist(x - drum.x, y - drum.y);
+      if (d <= r && d > r - 1.1) put(x, y, "o");
+      else if (d <= r - 1.1) put(x, y, " ");
+    }
+    var a0 = t * 7 * speed;                                   // el tambor gira rápido
+    for (var k = 0; k < 2; k++) {
+      var a = a0 + k * Math.PI, hx = drum.x + Math.cos(a) * (r - 3), hy = drum.y + Math.sin(a) * (r - 3) / 2;
+      line(drum.x, drum.y, hx, hy, function (i, x, y) { put(x, y, i === 0 ? "+" : "-"); });
+      put(hx, hy, "#");
+    }
+    put(drum.x, drum.y, "+");
+  }
+
+  function tapePath(t) {
+    var pts = [], seg = [];
+    for (var i = 0; i < path.length - 1; i++) {
+      line(path[i][0], path[i][1], path[i + 1][0], path[i + 1][1], function (k, x, y) { pts.push([x, y]); });
+    }
+    var ph = Math.floor(t * 11 * speed);
+    for (var j = 0; j < pts.length; j++) put(pts[j][0], pts[j][1], ((j - ph) % 4 + 4) % 4 < 2 ? "=" : "-");
+  }
+
+  function frame(t) {
+    g = []; for (var y = 0; y < H; y++) { g[y] = []; for (var x = 0; x < W; x++) g[y][x] = " "; }
+
+    // carcasa del casete (sin tapa)
+    var c = cassette;
+    for (var x = c.x0; x <= c.x1; x++) { put(x, c.y0, "-"); put(x, c.y1, "-"); }
+    for (var y = c.y0; y <= c.y1; y++) { put(c.x0, y, "|"); put(c.x1, y, "|"); }
+    put(c.x0, c.y0, "+"); put(c.x1, c.y0, "+"); put(c.x0, c.y1, "+"); put(c.x1, c.y1, "+");
+    text(31, 2, "[ V H S ]"); text(30, 14, "MEXPERIMENTA");
+
+    // la cinta pasa de un carrete al otro: uno se vacía y el otro se llena
+    var prog = (Math.sin(t * 0.045 * speed) + 1) / 2;       // 0..1 lento
+    var rs = 13 - 6 * prog, rt = 7 + 6 * prog;
+    var base = t * 3.2 * speed;
+    reel(supply, rs, -base / (rs / 9));
+    reel(take, rt, -base / (rt / 9));
+
+    // carcasa de la platina
+    for (var x2 = 1; x2 <= W - 2; x2++) { put(x2, H - 1, "-"); }
+    put(0, H - 1, "+"); put(W - 1, H - 1, "+");
+    for (var y2 = 16; y2 < H - 1; y2++) { put(1, y2, "|"); put(W - 2, y2, "|"); }
+
+    tapePath(t);
+    drawDrum(t);
+
+    // postes, cabezales y cabrestante
+    [[14, 15], [9, 19], [63, 15], [68, 19]].forEach(function (p) { put(p[0], p[1], "@"); });
+    put(26, 27, "["); put(27, 27, "]"); put(50, 27, "["); put(51, 27, "]");
+    put(57, 23, "O"); put(60, 23, "o");                        // cabrestante y rodillo
+
+    // indicadores
+    var blink = Math.floor(t * 2) % 2 === 0;
+    text(4, 18, blink ? "(*) REC" : "( ) REC");
+    var s = Math.floor(t * speed) % 86400, hh = ("0" + Math.floor(s / 3600)).slice(-2), mm = ("0" + Math.floor(s / 60 % 60)).slice(-2), ss = ("0" + (s % 60)).slice(-2);
+    text(4, 29, "CTR " + hh + ":" + mm + ":" + ss);
+    text(62, 29, speed > 1.5 ? "SYNC >>>" : "  ... ");
+    text(4, 31, "AIRTABLE  >>>  GITHUB  >>>  HOSTING");
+
+    var out = []; for (var r = 0; r < H; r++) out.push(g[r].join(""));
+    pre.textContent = out.join("\n");
+  }
+
+  var t0 = performance.now(), last = 0;
+  function loop(now) {
+    if (now - last > 70) { last = now; frame((now - t0) / 1000); }
+    requestAnimationFrame(loop);
+  }
+  frame(0);
+  if (!reduce) requestAnimationFrame(loop);
+
+  /* ───────────── Estado real de la sincronización ───────────── */
+  var parts = location.pathname.split("/").filter(Boolean);
+  var owner = /\.github\.io$/.test(location.hostname) ? location.hostname.split(".")[0] : "arkino-aace";
+  var repo = parts[0] || "mexperimenta";
+  var api = "https://api.github.com/repos/" + owner + "/" + repo;
+  document.getElementById("lnk-actions").href = "https://github.com/" + owner + "/" + repo + "/actions";
+
+  var PASOS = [
+    ["sync_arkino", "Leyendo Airtable"],
+    ["build_real_collections", "Armando las páginas"],
+    ["build_datos", "Contando el archivo"],
+    ["build_destacados", "Eligiendo destacados"],
+    ["build_stills", "Sacando fotogramas"],
+    ["Guardar cambios", "Guardando en el repositorio"],
+    ["Preparar", "Empaquetando para el hosting"],
+    ["FTP", "Enviando al hosting"]
+  ];
+  var ol = document.getElementById("pasos");
+  PASOS.forEach(function (p) { var li = document.createElement("li"); li.textContent = p[1]; ol.appendChild(li); });
+  var lis = ol.querySelectorAll("li");
+  function marcar(idx) { lis.forEach(function (li, i) { li.className = idx < 0 ? "" : (i < idx ? "done" : (i === idx ? "on" : "")); }); }
+
+  function fecha(d) {
+    return d.toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", hour12: false }) + " (CDMX)";
+  }
+  function proxima() {
+    var n = new Date(), nx = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate(), 9, 0, 0));   // 03:00 CDMX = 09:00 UTC
+    if (nx <= n) nx = new Date(nx.getTime() + 864e5);
+    var m = Math.round((nx - n) / 60000), h = Math.floor(m / 60);
+    return "en " + (h ? h + " h " : "") + (m % 60) + " min · 3:00 a. m. CDMX";
+  }
+  function set(id, html) { document.getElementById(id).innerHTML = html; }
+  set("proxima", "próxima: <b>" + proxima() + "</b>");
+
+  var demo = 0, demoTimer = null;
+  function demoCiclo() {                    // sin ejecución real en curso: la lista solo sigue el ritmo de la máquina
+    clearInterval(demoTimer);
+    demoTimer = setInterval(function () { demo = (demo + 1) % (PASOS.length + 3); marcar(demo < PASOS.length ? demo : -1); }, 2600);
+  }
+
+  function aplicar(run) {
+    var led = '<span class="led ' , txt;
+    clearInterval(demoTimer);
+    if (!run) { set("estado", led + '"></span>sin ejecuciones todavía'); set("ultima", ""); speed = 1; demoCiclo(); return; }
+    var st = run.status, cc = run.conclusion, d = new Date(run.run_started_at || run.created_at);
+    if (st !== "completed") {
+      set("estado", led + 'run"></span><b>sincronizando ahora…</b>'); speed = 3; set("nota", "");
+      fetch(api + "/actions/runs/" + run.id + "/jobs").then(function (r) { return r.json(); }).then(function (j) {
+        var steps = ((j.jobs || [])[0] || {}).steps || [], cur = -1, dn = 0;
+        steps.forEach(function (s) { PASOS.forEach(function (p, i) { if (s.name.indexOf(p[0]) >= 0) { if (s.status === "in_progress") cur = i; if (s.status === "completed") dn = Math.max(dn, i + 1); } }); });
+        marcar(cur >= 0 ? cur : dn);
+      }).catch(function () { demoCiclo(); });
+    } else if (cc === "success") {
+      speed = 1; set("estado", led + 'ok"></span><b>todo en orden</b>'); set("nota", ""); demoCiclo();
+    } else {
+      speed = 1; set("estado", led + 'bad"></span><b>la última vuelta falló</b>');
+      set("nota", "Revisa el detalle en «Ver las ejecuciones». Lo más común: un secreto vencido (AIRTABLE_TOKEN o la contraseña FTP).");
+      demoCiclo();
+    }
+    set("ultima", "última: <b>" + fecha(d) + "</b>");
+  }
+
+  function consultar() {
+    fetch(api + "/actions/runs?per_page=1", { headers: { Accept: "application/vnd.github+json" } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) { aplicar((d.workflow_runs || [])[0]); })
+      .catch(function () {
+        set("estado", '<span class="led"></span>no se pudo consultar el estado ahora');
+        set("nota", "GitHub limita las consultas desde un mismo lugar; vuelve a intentar en unos minutos.");
+        demoCiclo();
+      });
+  }
+  consultar(); setInterval(consultar, 60000); setInterval(function () { set("proxima", "próxima: <b>" + proxima() + "</b>"); }, 30000);
+})();
+</script>
+</body>
+</html>
